@@ -27,7 +27,8 @@ tquery
    FILE *queryf,
    FILE *outputf,
    const int tau,
-   const int verbose
+   const int verbose,
+   const int maxthreads
 )
 {
 
@@ -75,6 +76,8 @@ tquery
    // Start the query.
    narray_t *hits = new_narray();
    if (hits == NULL) exit(EXIT_FAILURE);
+   mtsync_t *mutex = new_mtsync();
+   if (mutex == NULL) exit(EXIT_FAILURE);
 
    int start = 0;
    for (int i = 0 ; i < nq_u ; i++) {
@@ -86,7 +89,7 @@ tquery
       }
       // Clear hits.
       hits->pos = 0;
-      search(trie, query->seq, tau, &hits, start, trail);
+      search(trie, query->seq, tau, &hits, start, trail, maxthreads, mutex);
       if (hits->err) {
          hits->err = 0;
          fprintf(stderr, "search error: %s\n", query->seq);
@@ -127,7 +130,8 @@ starcode
    FILE *outputf,
    const int tau,
    const int fmt,
-   const int verbose
+   const int verbose,
+   const int maxthreads
 )
 {
 
@@ -151,6 +155,11 @@ starcode
    narray_t *hits = new_narray();
    if (trie == NULL || hits == NULL) {
       fprintf(stderr, "error %d\n", check_trie_error_and_reset());
+      exit(EXIT_FAILURE);
+   }
+   mtsync_t *mutex = new_mtsync();
+   if (mutex == NULL) {
+      fprintf(stderr, "error allocating mt_sync\n");
       exit(EXIT_FAILURE);
    }
 
@@ -178,7 +187,7 @@ starcode
 
       // Clear hits.
       hits->pos = 0;
-      int err = search(trie, query->seq, tau, &hits, start, trail);
+      int err = search(trie, query->seq, tau, &hits, start, trail, maxthreads, mutex);
       if (err) {
          fprintf(stderr, "error %d\n", err);
          exit(EXIT_FAILURE);

@@ -164,7 +164,7 @@ main(
    if (verbose_flag < 0) verbose_flag = 0;
    if (dist_flag < 0) dist_flag = 3;
 
-   int exitcode = tquery(indexf, queryf, outputf, dist_flag, verbose_flag); 
+   int exitcode = tquery(indexf, queryf, outputf, dist_flag, verbose_flag, MAXTHREADS); 
 
    fclose(indexf);
    fclose(queryf);

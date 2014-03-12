@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <limits.h>
+#include <pthread.h>
 #ifndef __STARCODE_TRIE_LOADED_
 #define __STARCODE_TRIE_LOADED_
 
@@ -13,18 +14,34 @@
 struct tnode_t;
 struct tstack_t;
 struct info_t;
+struct arg_t;
+struct tmtsync_t;
 
 typedef struct tnode_t node_t;
 typedef struct tstack_t narray_t;
 typedef struct info_t info_t;
+typedef struct tmtsync_t mtsync_t;
 
-int        check_trie_error_and_reset(void);
-int        count_nodes(node_t*);
-int        search(node_t*, const char*, int, narray_t**, int, int);
-void       destroy_trie(node_t*, void(*)(void *));
-node_t   * new_trie(unsigned char, unsigned char);
-node_t   * insert_string(node_t*, const char*);
-narray_t * new_narray(void);
+// Search.
+int       search(node_t*, const char*, int, narray_t**, int, int, int, mtsync_t*);
+void      _search(node_t*, int, struct arg_t);
+void      dash(node_t*, const int*, struct arg_t);
+// Thread synchronization
+mtsync_t* new_mtsync(void);
+void      free_mtsync(mtsync_t*);
+// Trie creation and destruction.
+node_t*   insert(node_t*, int, unsigned char);
+node_t*   new_trienode(unsigned char);
+void      init_milestones(node_t*);
+void      destroy_nodes_downstream_of(node_t*, void(*)(void*));
+void      destroy_trie(node_t*, void(*)(void *));
+node_t*   new_trie(unsigned char, unsigned char);
+node_t*   insert_string(node_t*, const char*);
+// Utility.
+void     push(node_t*, narray_t**);
+int      check_trie_error_and_reset(void);
+int      count_nodes(node_t*);
+narray_t *new_narray(void);
 
 
 // Translation tables between letters and numbers.
@@ -79,6 +96,15 @@ struct arg_t {
    int         trail;
    int         height;
    int         err;
+   int         maxthreads;
+   mtsync_t  * mutex;
 };
+
+struct tmtsync_t {
+  pthread_mutex_t  * m_active;
+  pthread_mutex_t  * m_hits;
+  pthread_mutex_t ** m_milest;
+};
+
 
 #endif

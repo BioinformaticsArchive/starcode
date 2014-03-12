@@ -6,22 +6,12 @@
 // Global error handling.
 int ERROR = 0;
 
-// Search.
-void _search(node_t*, int, struct arg_t);
-void dash(node_t*, const int*, struct arg_t);
-// Trie creation and destruction.
-node_t *insert(node_t*, int, unsigned char);
-node_t *new_trienode(unsigned char);
-void init_milestones(node_t*);
-void destroy_nodes_downstream_of(node_t*, void(*)(void*));
-// Utility.
-void push(node_t*, narray_t**);
-int check_trie_error_and_reset(void);
+// Global thread sync vars
+int active_threads = 0;
+
 // Here functions.
 int get_maxtau(node_t *root) { return ((info_t *)root->data)->maxtau; }
 int get_height(node_t *root) { return ((info_t *)root->data)->height; }
-
-
 
 // ------  SEARCH FUNCTIONS ------ //
 
@@ -33,7 +23,9 @@ search
    const int         tau,
          narray_t ** hits,
    const int         start,
-   const int         trail
+   const int         trail,
+         int         maxthreads,
+         mtsync_t *  mutex
 )
 // SYNOPSIS:                                                              
 //   Front end query of a trie with the "trail search" algorithm. Search  
@@ -104,6 +96,8 @@ search
       .milestones  = info->milestones,
       .trail       = trail,
       .height      = height,
+      .maxthreads  = maxthreads,
+      .mutex       = mutex
    };
 
    // Run recursive search from cached nodes.
@@ -267,6 +261,70 @@ dash
 
    return;
 
+}
+
+
+// ------  THREAD SYNCHRONIZATION  ------ //
+
+
+mtsync_t*
+new_mtsync
+(void)
+// SYNOPSIS:                                                              
+//   Creates and initializes a new multithread synchronization structure.
+//                                                                        
+// RETURN:                                                                
+//   A pointer to the new mtsync_t.
+//                                                                        
+// SIDE EFFECTS:                                                          
+//   Allocates the memory for the mtsync_t.
+{
+   // Allocate memory for the structure
+   mtsync_t *mutx = (mtsync_t*) malloc(sizeof(mtsync_t));
+
+   // Initialize mutex attributes.
+   pthread_mutexattr_t mattr;
+   pthread_mutexattr_init(&mattr);
+   
+   // Alloc mutexes for shared args. This must be done through malloc,
+   // otherwise the mutexes won't be accessible outside the current scope.
+   mutx->m_active = (pthread_mutex_t* ) malloc(sizeof(pthread_mutex_t));
+   mutx->m_hits   = (pthread_mutex_t* ) malloc(sizeof(pthread_mutex_t));
+   mutx->m_milest = (pthread_mutex_t**) malloc(M*sizeof(pthread_mutex_t*));
+   
+   // Initialize mutexes.
+   pthread_mutex_init(mutx->m_active, &mattr);
+   pthread_mutex_init(mutx->m_hits,   &mattr);
+   for(int i=0; i<M; i++) {
+     mutx->m_milest[i] = (pthread_mutex_t*) malloc(sizeof(pthread_mutex_t));
+     pthread_mutex_init(mutx->m_milest[i], &mattr);
+   }
+
+   return mutx;
+}
+
+void
+free_mtsync
+(
+   mtsync_t *mtsync
+)
+// SYNOPSIS:                                                              
+//   Frees the memory space of a previously allocated mtsync_t.
+//                                                                        
+// RETURN:                                                                
+//   'void'.
+//                                                                        
+// SIDE EFFECTS:                                                          
+//   Frees the memory for the mtsync_t.                             
+{
+  for(int i=0; i<M; i++) {
+    free(mtsync->m_milest[i]);
+  }
+  free(mtsync->m_active);
+  free(mtsync->m_hits);
+  free(mtsync->m_milest);
+
+  free(mtsync);
 }
 
 

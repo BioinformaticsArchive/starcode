@@ -174,7 +174,8 @@ main(
                       outputf,
                       dist_flag,
                       format_flag,
-                      verbose_flag
+                      verbose_flag,
+                      MAXTHREADS
                   );
 
    if (inputf != stdin) fclose(inputf);
