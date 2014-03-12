@@ -69,4 +69,16 @@ struct info_t
             int        height;         // Critical depth with all hits.
    struct   tstack_t * milestones[M];  // Milestones for trail search.
 };
+
+struct arg_t {
+   narray_t ** hits;
+   narray_t ** milestones;
+   char        tau;
+   char        maxtau;
+   int       * query;
+   int         trail;
+   int         height;
+   int         err;
+};
+
 #endif

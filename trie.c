@@ -6,19 +6,6 @@
 // Global error handling.
 int ERROR = 0;
 
-struct arg_t {
-   narray_t ** hits;
-   narray_t ** milestones;
-   char        tau;
-   char        maxtau;
-   int       * query;
-   int         trail;
-   int         height;
-   int         err;
-};
-
-
-
 // Search.
 void _search(node_t*, int, struct arg_t);
 void dash(node_t*, const int*, struct arg_t);
@@ -179,10 +166,10 @@ _search
    // characters of the query.
    char *pcache = node->cache + arg.maxtau + 1;
 
-   // Risk of overflow at depth lower than 'tau'.
+   // Risk of segfault at depth lower than 'tau'.
    int maxa = min((depth-1), arg.tau);
 
-   // Penalty for match/mismatch and insertion/deletion resepectively.
+   // Prospective score for match/mismatch and insertion/deletion resepectively.
    unsigned char mmatch;
    unsigned char shift;
 
