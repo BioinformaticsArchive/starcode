@@ -6,9 +6,6 @@
 // Global error handling.
 int ERROR = 0;
 
-// Global thread sync vars
-int active_threads = 0;
-
 // Here functions.
 int get_maxtau(node_t *root) { return ((info_t *)root->data)->maxtau; }
 int get_height(node_t *root) { return ((info_t *)root->data)->height; }
@@ -24,8 +21,7 @@ search
          narray_t ** hits,
    const int         start,
    const int         trail,
-         int         maxthreads,
-         mtsync_t *  mutex
+         mtsync_t *  mt
 )
 // SYNOPSIS:                                                              
 //   Front end query of a trie with the "trail search" algorithm. Search  
@@ -96,15 +92,20 @@ search
       .milestones  = info->milestones,
       .trail       = trail,
       .height      = height,
-      .maxthreads  = maxthreads,
-      .mutex       = mutex
+      .mt          = mt
    };
 
    // Run recursive search from cached nodes.
    narray_t *milestones = info->milestones[start];
    for (int i = 0 ; i < milestones->pos ; i++) {
       node_t *start_node = milestones->nodes[i];
+      arg.mt->maxdepth = start + MAXMTDEPTH;
       _search(start_node, start + 1, arg);
+
+      // Yield the CPU while waiting for threads.
+      while(arg.mt->active > 0) {
+         sched_yield();
+      }
    }
 
    return 0;
@@ -180,10 +181,23 @@ _search
       common[a] = min(mmatch, shift);
    }
 
-   node_t *child;
+   // Get non-null branches
+   int nbranch = 0;
+   int branches[6];
+
    for (int i = 0 ; i < 6 ; i++) {
-      // Skip if current node has no child at this position.
-      if ((child = node->child[i]) == NULL) continue;
+      if (node->child[i] != NULL) {
+         branches[nbranch] = i;
+         nbranch++;
+      }
+   }
+   //printf("COUNT BRANCHES nbrach=%d\n",nbranch);
+  
+   node_t *child;
+   for (int i = nbranch-1; i >= 0; i--) {
+      //printf("GET CHILD BRANCH i=%d at depth=%d\n",i,depth);
+      // Get a non-null child node
+      child = node->child[branches[i]];
 
       // Same remark as for parent cache.
       char *ccache = child->cache + arg.maxtau + 1;
@@ -204,11 +218,17 @@ _search
       if (ccache[0] > arg.tau) continue;
 
       // Cache nodes in milestones when trailing.
-      if (depth <= arg.trail) push(child, (arg.milestones)+depth);
+      if (depth <= arg.trail) {
+         pthread_mutex_lock(arg.mt->m_milest[depth]);
+         push(child, (arg.milestones)+depth);
+         pthread_mutex_unlock(arg.mt->m_milest[depth]);
+      }
 
       // Reached the height, it's a hit!
       if (depth == arg.height) {
+         pthread_mutex_lock(arg.mt->m_hits);
          push(child, arg.hits);
+         pthread_mutex_unlock(arg.mt->m_hits);
          continue;
       }
 
@@ -217,12 +237,103 @@ _search
          dash(child, arg.query+depth+1, arg);
          continue;
       }
+      
+      //printf("THREAD FACTORY ROUTINE: i=%d, depth=%d, maxdepth=%d\n",i,depth,arg.mt->maxdepth);
+      // Avoid slave thread
+      if (i > 0 && depth <= arg.mt->maxdepth && arg.mt->active < arg.mt->maxthreads) {
+         // Non-blocking implementation. Create a thread only if the mutex is available.
+         if (pthread_mutex_trylock(arg.mt->m_control) == 0) {
+            // [MUTEX START] Got control MUTEX.
+            // Check for available threads.
+            if (arg.mt->active < arg.mt->maxthreads) {
+               // Register the thread
+               short threadidx = 0;
+               while ((arg.mt->busy[threadidx] != 0) && (threadidx < arg.mt->maxthreads)) threadidx++;
 
+               arg.mt->active++;
+               arg.mt->busy[threadidx] = 1;
+
+               // [MUTEX END-1] Unlock MUTEX.
+               pthread_mutex_unlock(arg.mt->m_control);
+
+               // Pack thread arguments.
+               mtarg_t * mtargs = (mtarg_t *) malloc(sizeof(mtarg_t));
+               mtargs->depth = depth+1;
+               mtargs->threadidx = threadidx;
+               mtargs->node = child;
+               mtargs->arg = arg;
+
+               pthread_t thread;
+
+               //printf("CREATE NEW THREAD!\n");
+               // Create thread.
+               int err;
+               if ((err=pthread_create(&thread,NULL,_mtsearch,(void *) mtargs)) == 0) {
+                  // Detach thread to directly release the thread resources upon termination.
+                  pthread_detach(thread);
+                  continue;
+               } else {
+                  fprintf(stderr,"Error creating thread: %s\n",strerror(err));
+                  // Thread error: Unregister and DIY.
+                  pthread_mutex_lock(arg.mt->m_control);
+                  arg.mt->active--;
+                  arg.mt->busy[threadidx] = 0;
+                  pthread_mutex_unlock(arg.mt->m_control);
+                  free(mtargs);
+               }
+                           
+            } else {
+               // [MUTEX END-2] Unlock mutex -- no threads available.
+               pthread_mutex_unlock(arg.mt->m_control);
+            }
+         }
+      }
+
+      // If slave OR too deep OR mutex locked OR no threads available OR thread error, then do it yourself
       _search(child, depth+1, arg);
-
    }
 
 }
+
+
+void *
+_mtsearch
+(
+   void * args
+)
+// SYNOPSIS:                                                              
+//   Multithreading handler for _search function. Unpacks arguments and calls _search(...).
+//   Once the job is done, frees the thread register in the current multithread sync struct.
+//
+//                                                                        
+// PARAMETERS:                                                            
+//   *args: Pointer to an appropriately defined mtarg_t structure.
+//                                                                        
+// RETURN:                                                                
+//   'void'.                                                              
+//                                                                        
+// SIDE EFFECTS:                                                          
+//   Updates 'arg.mt' upon thread termination. _search() side effects also apply.
+{
+   mtarg_t * mtargs = (mtarg_t *) args;
+   int depth = mtargs->depth;
+   int threadidx = mtargs->threadidx;
+   struct arg_t arg = mtargs->arg;
+   node_t * node = mtargs->node;
+   free(args);
+   _search(node, depth, arg);
+
+   // When job is done, unregister thread
+   pthread_mutex_lock(arg.mt->m_control);
+   arg.mt->busy[threadidx] = 0;
+   arg.mt->active--;
+   pthread_mutex_unlock(arg.mt->m_control);
+
+   //printf("THREAD JOB DONE - depth=%d\n",mtargs->depth);
+
+   pthread_exit(NULL);
+}
+
 
 
 void
@@ -250,15 +361,24 @@ dash
    int c;
    node_t *child;
 
+   //printf("DASHING...\n");
    // Early return if the suffix path is broken.
    while ((c = *suffix++) != EOS) {
-      if ((c > 4) || (child = node->child[c]) == NULL) return;
+      if ((c > 4) || (child = node->child[c]) == NULL) {
+         //printf("DASH BROKEN - returning\n");
+         return;
+      }
       node = child;
    }
 
    // End of query, check whether node is a tail.
-   if (node->data != NULL) push(node, arg.hits);
+   if (node->data != NULL) {
+      pthread_mutex_lock(arg.mt->m_hits);
+      push(node, arg.hits);
+      pthread_mutex_unlock(arg.mt->m_hits);
+   }
 
+   //printf("DASH FINISHED");
    return;
 
 }
@@ -269,10 +389,17 @@ dash
 
 mtsync_t*
 new_mtsync
-(void)
+(
+ short maxthreads,
+ short maxdepth
+)
 // SYNOPSIS:                                                              
 //   Creates and initializes a new multithread synchronization structure.
-//                                                                        
+//
+// PARAMETERS:
+//   maxthreads: Maximum number of concurrent threads allowed.
+//   maxdepth:   Maximum trie depth where multithreading is allowed.
+//                                                            
 // RETURN:                                                                
 //   A pointer to the new mtsync_t.
 //                                                                        
@@ -282,18 +409,27 @@ new_mtsync
    // Allocate memory for the structure
    mtsync_t *mutx = (mtsync_t*) malloc(sizeof(mtsync_t));
 
+   // Set number of threads and set active to 0
+   mutx->maxthreads = maxthreads;
+   mutx->active = 0;
+   mutx->maxdepth = maxdepth;
+
+   // Allocate flag buffer
+   mutx->busy = (char *) malloc(maxthreads * sizeof(char));
+   memset(mutx->busy, 0, maxthreads * sizeof(char));
+   
    // Initialize mutex attributes.
    pthread_mutexattr_t mattr;
    pthread_mutexattr_init(&mattr);
    
    // Alloc mutexes for shared args. This must be done through malloc,
    // otherwise the mutexes won't be accessible outside the current scope.
-   mutx->m_active = (pthread_mutex_t* ) malloc(sizeof(pthread_mutex_t));
+   mutx->m_control = (pthread_mutex_t* ) malloc(sizeof(pthread_mutex_t));
    mutx->m_hits   = (pthread_mutex_t* ) malloc(sizeof(pthread_mutex_t));
    mutx->m_milest = (pthread_mutex_t**) malloc(M*sizeof(pthread_mutex_t*));
    
    // Initialize mutexes.
-   pthread_mutex_init(mutx->m_active, &mattr);
+   pthread_mutex_init(mutx->m_control, &mattr);
    pthread_mutex_init(mutx->m_hits,   &mattr);
    for(int i=0; i<M; i++) {
      mutx->m_milest[i] = (pthread_mutex_t*) malloc(sizeof(pthread_mutex_t));
@@ -320,7 +456,7 @@ free_mtsync
   for(int i=0; i<M; i++) {
     free(mtsync->m_milest[i]);
   }
-  free(mtsync->m_active);
+  free(mtsync->m_control);
   free(mtsync->m_hits);
   free(mtsync->m_milest);
 
@@ -642,15 +778,15 @@ new_narray
 // SIDE EFFECTS:                                                          
 //   Allocates the memory for the node array.                             
 {
-   // Allocate memory for a node array, with 32 initial slots.
-   narray_t *new = malloc(3 * sizeof(int) + 32 * sizeof(node_t *));
+   // Allocate memory for a node array, with INITSTACK initial slots.
+   narray_t *new = malloc(3 * sizeof(int) + INITSTACK * sizeof(node_t *));
    if (new == NULL) {
       ERROR = 603;
       return NULL;
    }
    new->err = 0;
    new->pos = 0;
-   new->lim = 32;
+   new->lim = INITSTACK;
    return new;
 }
 

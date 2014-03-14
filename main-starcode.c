@@ -1,4 +1,8 @@
+#include <stdio.h>
+#include <execinfo.h>
+#include <signal.h>
 #include "starcode.h"
+
 
 char *USAGE = "Usage:\n"
 "  starcode [-v] [-d dist] [-f format] [-i input] [-o output]\n"
@@ -10,13 +14,32 @@ char *USAGE = "Usage:\n"
 
 void say_usage(void) { fprintf(stderr, "%s\n", USAGE); }
 
+
+// SIGSEGV Signal handler -- backtrace may be useful to debug threads
+void handler(int sig) {
+  void *array[10];
+  size_t size;
+
+// Flush any pending printf
+  printf("\n");
+
+  // get void*'s for all entries on the stack
+  size = backtrace(array, 10);
+
+  // print out all the frames to stderr
+  fprintf(stderr, "Error: signal %d:\n", sig);
+  backtrace_symbols_fd(array, size, STDERR_FILENO);
+  exit(1);
+}
+
 int
 main(
    int argc,
    char **argv
 )
 {
-
+   // Segmentation fault handler
+   signal(SIGSEGV, handler);
    // Unset flags (value -1).
    int verbose_flag = -1;
    int format_flag = -1;

@@ -76,8 +76,8 @@ tquery
    // Start the query.
    narray_t *hits = new_narray();
    if (hits == NULL) exit(EXIT_FAILURE);
-   mtsync_t *mutex = new_mtsync();
-   if (mutex == NULL) exit(EXIT_FAILURE);
+   mtsync_t *mt = new_mtsync(maxthreads,MAXMTDEPTH);
+   if (mt == NULL) exit(EXIT_FAILURE);
 
    int start = 0;
    for (int i = 0 ; i < nq_u ; i++) {
@@ -89,7 +89,7 @@ tquery
       }
       // Clear hits.
       hits->pos = 0;
-      search(trie, query->seq, tau, &hits, start, trail, maxthreads, mutex);
+      search(trie, query->seq, tau, &hits, start, trail, mt);
       if (hits->err) {
          hits->err = 0;
          fprintf(stderr, "search error: %s\n", query->seq);
@@ -115,6 +115,7 @@ tquery
 
    free(i_useq);
    free(hits);
+   free(mt);
 
    OUTPUT = NULL;
 
@@ -157,8 +158,8 @@ starcode
       fprintf(stderr, "error %d\n", check_trie_error_and_reset());
       exit(EXIT_FAILURE);
    }
-   mtsync_t *mutex = new_mtsync();
-   if (mutex == NULL) {
+   mtsync_t *mt = new_mtsync(0,MAXMTDEPTH);
+   if (mt == NULL) {
       fprintf(stderr, "error allocating mt_sync\n");
       exit(EXIT_FAILURE);
    }
@@ -185,9 +186,15 @@ starcode
          exit(EXIT_FAILURE);
       }
 
+      // Update MT params. Start single thread until MTTRIESIZE.
+      if (i == MTTRIESIZE) {
+         fprintf(stderr, "boosting with MT!\n");
+         mt->maxthreads = maxthreads;
+      }
+
       // Clear hits.
       hits->pos = 0;
-      int err = search(trie, query->seq, tau, &hits, start, trail, maxthreads, mutex);
+      int err = search(trie, query->seq, tau, &hits, start, trail, mt);
       if (err) {
          fprintf(stderr, "error %d\n", err);
          exit(EXIT_FAILURE);
@@ -235,6 +242,7 @@ starcode
 
    }
 
+   free(mt);
    free(hits);
    if (verbose) {
       fprintf(stderr, "starcode: %d/%d\n", utotal, utotal);

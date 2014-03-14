@@ -9,8 +9,6 @@
 #ifndef __STARCODE_LOADED_
 #define __STARCODE_LOADED_
 
-#define MAXTHREADS 8
-
 #if !defined( __GNUC__) || defined(__APPLE__)
    ssize_t getline(char **lineptr, size_t *n, FILE *stream);
 #endif

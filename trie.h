@@ -10,24 +10,32 @@
 #define EOS -1          // End Of String -- for 'dash()'.
 #define MAXBRCDLEN 127  // Maximum barcode length.
 #define M 128           // MAXBRCDLEN + 1 for short.
+#define INITSTACK 32
+
+#define MAXTHREADS 7
+#define MAXMTDEPTH 1
+#define MTTRIESIZE 100000
 
 struct tnode_t;
 struct tstack_t;
 struct info_t;
 struct arg_t;
 struct tmtsync_t;
+struct tmtarg_t;
 
 typedef struct tnode_t node_t;
 typedef struct tstack_t narray_t;
 typedef struct info_t info_t;
 typedef struct tmtsync_t mtsync_t;
+typedef struct tmtarg_t mtarg_t;
 
 // Search.
-int       search(node_t*, const char*, int, narray_t**, int, int, int, mtsync_t*);
+int       search(node_t*, const char*, int, narray_t**, int, int, mtsync_t*);
 void      _search(node_t*, int, struct arg_t);
+void*     _mtsearch(void*);
 void      dash(node_t*, const int*, struct arg_t);
 // Thread synchronization
-mtsync_t* new_mtsync(void);
+mtsync_t* new_mtsync(short,short);
 void      free_mtsync(mtsync_t*);
 // Trie creation and destruction.
 node_t*   insert(node_t*, int, unsigned char);
@@ -38,10 +46,10 @@ void      destroy_trie(node_t*, void(*)(void *));
 node_t*   new_trie(unsigned char, unsigned char);
 node_t*   insert_string(node_t*, const char*);
 // Utility.
-void     push(node_t*, narray_t**);
-int      check_trie_error_and_reset(void);
-int      count_nodes(node_t*);
-narray_t *new_narray(void);
+void      push(node_t*, narray_t**);
+int       check_trie_error_and_reset(void);
+int       count_nodes(node_t*);
+narray_t  *new_narray(void);
 
 
 // Translation tables between letters and numbers.
@@ -64,18 +72,18 @@ static const int altranslate[256] = {
 
 struct tnode_t
 {
-            void     * data;           // Data (for tail nodes only).
+   void     * data;           // Data (for tail nodes only).
    struct   tnode_t  * child[6];       // Array of 6 children pointers.
-            uint32_t   path;           // Encoded path end to the node.
-            char       cache[];        // Dynamic programming space.
+   uint32_t   path;           // Encoded path end to the node.
+   char       cache[];        // Dynamic programming space.
 };
 
 
 struct tstack_t
 {
-            int        err;            // Trace memory errors.
-            int        lim;            // Stack size.
-            int        pos;            // Number of items.
+   int        err;            // Trace memory errors.
+   int        lim;            // Stack size.
+   int        pos;            // Number of items.
    struct   tnode_t  * nodes[];        // Nodes (items).
 };
 
@@ -83,28 +91,37 @@ struct tstack_t
 struct info_t
 {
    unsigned char       maxtau;         // Max distance the trie can take.
-            int        height;         // Critical depth with all hits.
+   int        height;         // Critical depth with all hits.
    struct   tstack_t * milestones[M];  // Milestones for trail search.
 };
 
 struct arg_t {
-   narray_t ** hits;
-   narray_t ** milestones;
-   char        tau;
-   char        maxtau;
-   int       * query;
-   int         trail;
-   int         height;
-   int         err;
-   int         maxthreads;
-   mtsync_t  * mutex;
+   narray_t         ** hits;
+   narray_t         ** milestones;
+   char                tau;
+   char                maxtau;
+   int               * query;
+   int                 trail;
+   int                 height;
+   int                 err;
+   struct tmtsync_t  * mt;
 };
 
 struct tmtsync_t {
-  pthread_mutex_t  * m_active;
-  pthread_mutex_t  * m_hits;
-  pthread_mutex_t ** m_milest;
+   short              active;
+   short              maxthreads;
+   short              maxdepth;
+   char             * busy;
+   pthread_mutex_t  * m_control;
+   pthread_mutex_t  * m_hits;
+   pthread_mutex_t ** m_milest;
 };
 
+struct tmtarg_t {
+   int              depth;
+   int              threadidx;
+   struct tnode_t * node;
+   struct arg_t     arg;
+};   
 
 #endif

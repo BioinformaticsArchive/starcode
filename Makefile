@@ -1,5 +1,5 @@
 OBJECTS= trie.o starcode.o
-CFLAGS= -std=c99 -Wall -g -Wall -O3
+CFLAGS= -std=c99 -Wall -g -Wall -O3 -rdynamic
 LDLIBS= -lm -pthread
 CC= gcc
 

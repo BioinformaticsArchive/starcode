@@ -13,3 +13,5 @@ test/analysis.txt
 test/debug.txt
 test/out
 tquery
+#*
+.#*
